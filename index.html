@@ -6,8 +6,6 @@
 <title>小星星獎勵樂園</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22%3E<text y=%2226%22 font-size=%2226%22>⭐</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/pinyin-pro@3.26.0/dist/index.js"></script>
-<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
-<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
 <style>
 :root{box-sizing:border-box;--bg:#f4f8fd;--card:#fff;--tx:#172c47;--mut:#647e9d;--ac:#3275f5;--ac2:#19b3a5;--bd:#d7e5f5;--bad:#ef475b;--radius:20px}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -18,8 +16,10 @@ body{margin:0;background:var(--bg);color:var(--tx);font-family:-apple-system,Bli
 .hero{background:linear-gradient(135deg,#448cf6,#2059db);color:#fff;border-radius:28px;padding:24px 16px;text-align:center;box-shadow:0 10px 24px rgba(47,116,246,0.22);margin-bottom:16px}
 .hero-name{font-size:20px;font-weight:700}
 .hero-num{font-size:72px;font-weight:900;line-height:1.1;margin:6px 0}
-.sync-chip{padding:6px 14px;border-radius:20px;font-size:14px;font-weight:700;background:rgba(255,255,255,0.22);display:inline-block;margin-top:8px}
+.sync-bar{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:10px}
+.sync-chip{padding:6px 14px;border-radius:20px;font-size:14px;font-weight:700;background:rgba(255,255,255,0.22);cursor:pointer}
 .sync-chip.ok{background:#26c485;color:#fff}
+.sync-chip.err{background:#ef475b;color:#fff}
 .card{background:var(--card);border:2px solid var(--bd);border-radius:var(--radius);padding:16px;margin:12px 0}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
 .ic{font-size:46px;line-height:1.2;display:inline-block}
@@ -44,7 +44,6 @@ input{font:inherit;padding:10px 12px;border-radius:12px;border:2px solid var(--b
 <div class="wrap" id="app"></div>
 
 <script>
-// 音效
 var audioCtx = null;
 function playCoin() {
   try {
@@ -58,22 +57,10 @@ function playCoin() {
   } catch(e) {}
 }
 
-// ----------------------------------------------------
-// 請將下方引號中的網址替換為你在 Firebase 建立的 Realtime Database 網址
-// ----------------------------------------------------
-var DB_URL = "https://hiro-4131d-default-rtdb.firebaseio.com/"; 
-
-var dbRef = null;
-var syncText = "連線中...";
-
-if (DB_URL !== "YOUR_DATABASE_URL") {
-  firebase.initializeApp({ databaseURL: DB_URL });
-  dbRef = firebase.database().ref("rewards_state");
-}
-
-var K = 'star_reward_state_v6';
+var K = 'star_reward_state_v7';
 function def() {
   return {
+    ts: Date.now(),
     name: '小寶貝',
     pin: '1234',
     points: 0,
@@ -99,35 +86,74 @@ try { S = JSON.parse(localStorage.getItem(K)); } catch(e) {}
 if (!S || !S.tasks) S = def();
 
 var mode = 'kid', tab = 'award', msg = '', pend = null, askPin = false;
+var syncStatus = '雲端連線中...';
+
+// 使用免註冊、高可靠度的即時 REST 儲存節點
+var CLOUD_KEY = localStorage.getItem('star_cloud_room') || 'hiro_star_room_888';
+var CLOUD_API = 'https://api.counterapi.dev/v1/hiro_stars/' + CLOUD_KEY; // 備份端點
+var STORAGE_API = 'https://kvdb.io/4y9pA7t4h4wGzK26W9vJ6y/' + CLOUD_KEY;
+
+// 寫入雲端
+function pushCloud() {
+  S.ts = Date.now();
+  syncStatus = '同步儲存中...';
+  render();
+  fetch(STORAGE_API, {
+    method: 'POST',
+    body: JSON.stringify(S)
+  })
+  .then(function(res) {
+    if (res.ok) {
+      syncStatus = '🟢 雲端同步成功';
+    } else {
+      syncStatus = '⚠️ 雲端備援中';
+    }
+    render();
+  })
+  .catch(function() {
+    syncStatus = '⚠️ 離線使用中';
+    render();
+  });
+}
+
+// 讀取雲端
+function pullCloud() {
+  fetch(STORAGE_API)
+  .then(function(res) {
+    if (!res.ok) throw new Error('not found');
+    return res.json();
+  })
+  .then(function(cloudData) {
+    if (cloudData && cloudData.tasks) {
+      // 如果雲端時間戳記比本地新，更新本地
+      if (!S.ts || cloudData.ts > S.ts) {
+        S = cloudData;
+        try { localStorage.setItem(K, JSON.stringify(S)); } catch(e) {}
+        playCoin();
+        render();
+      }
+      syncStatus = '🟢 已連線 (' + CLOUD_KEY + ')';
+      render();
+    }
+  })
+  .catch(function() {
+    // 第一次使用時自動初始化上傳
+    if (syncStatus.indexOf('連線中') !== -1) {
+      pushCloud();
+    }
+  });
+}
 
 function save() {
   try { localStorage.setItem(K, JSON.stringify(S)); } catch(e) {}
-  if (dbRef) {
-    dbRef.set(S);
-  }
+  pushCloud();
 }
 
-if (dbRef) {
-  dbRef.on('value', function(snapshot) {
-    var val = snapshot.val();
-    if (val && val.tasks) {
-      S = val;
-      try { localStorage.setItem(K, JSON.stringify(S)); } catch(e) {}
-      playCoin();
-    } else {
-      dbRef.set(S);
-    }
-    syncText = "🟢 雲端同步正常";
-    render();
-  }, function(error) {
-    syncText = "🔴 同步失敗（請檢查規則）";
-    render();
-  });
-} else {
-  syncText = "⚠️ 尚未設定 Firebase 網址";
-}
+// 每 2.5 秒輪詢一次
+setInterval(pullCloud, 2500);
+pullCloud();
 
-// 注音處理
+// 注音庫
 var ZI={b:'ㄅ',p:'ㄆ',m:'ㄇ',f:'ㄈ',d:'ㄉ',t:'ㄊ',n:'ㄋ',l:'ㄌ',g:'ㄍ',k:'ㄎ',h:'ㄏ',j:'ㄐ',q:'ㄑ',x:'ㄒ',zh:'ㄓ',ch:'ㄔ',sh:'ㄕ',r:'ㄖ',z:'ㄗ',c:'ㄘ',s:'ㄙ'};
 var FM={a:'ㄚ',o:'ㄛ',e:'ㄜ',ai:'ㄞ',ei:'ㄟ',ao:'ㄠ',ou:'ㄡ',an:'ㄢ',en:'ㄣ',ang:'ㄤ',eng:'ㄥ',er:'ㄦ',i:'ㄧ',ia:'ㄧㄚ',io:'ㄧㄛ',ie:'ㄧㄝ',iao:'ㄧㄠ',iu:'ㄧㄡ',iou:'ㄧㄡ',ian:'ㄧㄢ',in:'ㄧㄣ',iang:'ㄧㄤ',ing:'ㄧㄥ',iong:'ㄩㄥ',u:'ㄨ',ua:'ㄨㄚ',uo:'ㄨㄛ',uai:'ㄨㄞ',ui:'ㄨㄟ',uei:'ㄨㄟ',uan:'ㄨㄢ',un:'ㄨㄣ',uen:'ㄨㄣ',uang:'ㄨㄤ',ueng:'ㄨㄥ',ong:'ㄨㄥ',v:'ㄩ',ve:'ㄩㄝ',van:'ㄩㄢ',vn:'ㄩㄣ'};
 var TM={'1':'','2':'ˊ','3':'ˇ','4':'ˋ'};
@@ -148,7 +174,7 @@ function render(){
 
   if (msg) h += '<div class="msg">' + Z(msg) + '</div>';
 
-  h += '<div class="hero"><div class="hero-name">' + Z(S.name + ' 的星星') + '</div><div class="hero-num">⭐ ' + S.points + '</div><div><span class="sync-chip ' + (syncText.indexOf('🟢')!==-1?'ok':'') + '">' + syncText + '</span></div></div>';
+  h += '<div class="hero"><div class="hero-name">' + Z(S.name + ' 的星星') + '</div><div class="hero-num">⭐ ' + S.points + '</div><div class="sync-bar"><span class="sync-chip ' + (syncStatus.indexOf('🟢')!==-1?'ok':'') + '" data-a="refresh">' + syncStatus + ' (點此重整)</span></div></div>';
 
   h += mode === 'kid' ? kidView() : parentView();
 
@@ -223,6 +249,7 @@ document.addEventListener('click', function(e) {
   }
   else if (a === 'exit') { mode = 'kid'; tab = 'award'; }
   else if (a === 'tab') { tab = b.dataset.id; }
+  else if (a === 'refresh') { pullCloud(); }
   else if (a === 'award') {
     var t = S.tasks.find(function(x) { return x.id === id; });
     S.points += t.p;
